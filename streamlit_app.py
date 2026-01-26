@@ -43,16 +43,21 @@ if buscar:
         st.error("Informe um ativo válido.")
         st.stop()
 
-    with st.spinner("Consultando dados da CVM..."):
+    with st.spinner("Consultando dados da CVM... (pode demorar ao varrer vários meses)"):
         try:
-            yyyymm, df_cnpjs, df_matches, df_errors = core.buscar_cnpjs(
-                ativo=ativo,
-                categoria=categoria,
-                max_workers=workers
+            ultimo_yyyymm, df_cnpjs, df_matches, df_errors, df_meses_match = core.buscar_cnpjs(
+                ativo, categoria=categoria, max_workers=workers, meses=meses
             )
         except Exception as e:
             st.error(f"Erro na execução: {e}")
             st.stop()
+
+    st.success(f"Consulta finalizada — últimos {meses} meses (até {ultimo_yyyymm})")
+    st.metric("CNPJs encontrados", len(df_cnpjs))
+
+    if not df_meses_match.empty:
+        st.caption(f"Meses com ocorrência: {', '.join(df_meses_match['YYYYMM_com_match'].tolist())}")
+
 
     # ----------------- Resultados -----------------
     st.success(f"Consulta finalizada — CDA {yyyymm}")
