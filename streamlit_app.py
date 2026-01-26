@@ -82,7 +82,7 @@ if buscar:
     st.download_button(
         label="📥 Baixar Excel",
         data=output.getvalue(),
-        file_name=f"resultado_{ativo}_{categoria}_{yyyymm}.xlsx",
+        file_name=f"resultado_{ativo}_{categoria}_{ultimo_yyyymm}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
