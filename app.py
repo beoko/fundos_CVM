@@ -1,14 +1,26 @@
 import io
 import pandas as pd
 import streamlit as st
-from core import buscar_cnpjs_por_isin
+from core import buscar_cnpjs  # <- trocou aqui
 
-st.set_page_config(page_title="CVM ISIN → CNPJs", layout="centered")
+st.set_page_config(page_title="CVM Ativo → CNPJs", layout="centered")
 
-st.title("CVM – ISIN → CNPJs")
-st.caption("Busca no CDA mais recente da CVM e retorna CNPJs associados ao ISIN.")
+st.title("CVM – Ativo → CNPJs")
+st.caption("Busca no CDA mais recente da CVM e retorna CNPJs associados ao ativo (Crédito Privado via ISIN ou CDB).")
 
-isin = st.text_input("Informe o ISIN", placeholder="Ex: BRBRKMDBS0A1").strip().upper()
+# <- novo: escolha de categoria
+categoria_ui = st.radio(
+    "Tipo de ativo",
+    ["Crédito Privado (ISIN)", "CDB"],
+    horizontal=True
+)
+categoria = "CREDITO_PRIVADO" if "ISIN" in categoria_ui else "CDB"
+
+# <- novo: um único input de ativo (ISIN ou CDB)
+ativo = st.text_input(
+    "Informe o ativo",
+    placeholder="Crédito: BRBRKMDBS0A1 | CDB: CDB2236XODL (código) ou CDB PRE DU CDB2236XODL (descrição completa)"
+).strip().upper()
 
 col1, col2 = st.columns(2)
 with col1:
@@ -17,14 +29,15 @@ with col2:
     buscar = st.button("Buscar")
 
 if buscar:
-    if not isin:
-        st.error("Informe um ISIN válido.")
+    if not ativo:
+        st.error("Informe um ativo válido.")
         st.stop()
 
     with st.spinner("Consultando dados da CVM..."):
         try:
-            yyyymm, df_cnpjs, df_matches, df_errors = buscar_cnpjs_por_isin(
-                isin, max_workers=workers
+            # <- trocou aqui: chama buscar_cnpjs com categoria
+            yyyymm, df_cnpjs, df_matches, df_errors = buscar_cnpjs(
+                ativo, categoria=categoria, max_workers=workers
             )
         except Exception as e:
             st.error(f"Erro na execução: {e}")
@@ -47,11 +60,11 @@ if buscar:
     st.download_button(
         "📥 Baixar Excel",
         data=output.getvalue(),
-        file_name=f"resultado_{isin}_{yyyymm}.xlsx",
+        file_name=f"resultado_{ativo}_{categoria}_{yyyymm}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    with st.expander("Arquivos onde o ISIN apareceu"):
+    with st.expander("Arquivos onde o ativo apareceu"):
         st.dataframe(df_matches, use_container_width=True)
 
     if not df_errors.empty:
