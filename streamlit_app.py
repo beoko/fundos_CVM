@@ -31,11 +31,17 @@ ativo = st.text_input(
 ).strip().upper()
 
 # ----------------- Controles -----------------
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
+
 with col1:
     workers = st.slider("Paralelismo (threads)", 1, 6, 2)
+
 with col2:
+    meses = st.slider("Meses a consultar", 1, 36, 12)
+
+with col3:
     buscar = st.button("Buscar")
+
 
 # ----------------- Execução -----------------
 if buscar:
