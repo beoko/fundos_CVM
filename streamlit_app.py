@@ -66,8 +66,6 @@ if buscar:
 
 
     # ----------------- Resultados -----------------
-   st.success(f"Consulta finalizada — últimos {meses} meses (até {ultimo_yyyymm})")
-
     st.metric("CNPJs encontrados", len(df_cnpjs))
 
     st.subheader("CNPJs encontrados")
