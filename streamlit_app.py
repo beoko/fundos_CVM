@@ -1,7 +1,7 @@
 import io
 import pandas as pd
 import streamlit as st
-import core
+import cvm_core as core
 
 # ----------------- Configuração da página -----------------
 st.set_page_config(
