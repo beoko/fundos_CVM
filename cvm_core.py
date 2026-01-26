@@ -30,13 +30,18 @@ def norm_cnpj(x: str) -> str:
     return re.sub(r"\D", "", str(x))
 
 # ----------------- util CVM -----------------
-def descobrir_zip_mais_recente() -> Tuple[str, str]:
+def listar_zips_disponiveis() -> List[str]:
+    """
+    Retorna lista de YYYYMM disponíveis no diretório CDA, em ordem decrescente (mais recente primeiro).
+    """
     html = requests.get(CDA_DIR_URL, headers=HEADERS, timeout=60).text
     zips = re.findall(r'cda_fi_(\d{6})\.zip', html)
     if not zips:
         raise RuntimeError("Não encontrei arquivos ZIP no diretório da CVM.")
-    yyyymm = max(zips)
-    return yyyymm, f"{CDA_DIR_URL}cda_fi_{yyyymm}.zip"
+    return sorted(set(zips), reverse=True)
+
+def url_zip(yyyymm: str) -> str:
+    return f"{CDA_DIR_URL}cda_fi_{yyyymm}.zip"
 
 def _get_cnpj_col(columns: List[str]) -> Optional[str]:
     cols = list(columns)
@@ -190,14 +195,49 @@ def _processar_arquivo(zip_bytes: bytes, filename: str, termo: str, modo: str):
     except Exception as e:
         return set(), False, str(e)
 
-# ----------------- API principal -----------------
-def buscar_cnpjs(ativo: str, categoria: str, max_workers: int = 2):
+def _varrer_um_mes(yyyymm: str, termo: str, modo: str, max_workers: int) -> Tuple[Set[str], List[str], List[Tuple[str, str]]]:
+    """
+    Varre um ZIP (um mês). Retorna:
+      - set cnpjs
+      - lista de arquivos com match
+      - lista de (arquivo, erro)
+    """
+    r = requests.get(url_zip(yyyymm), headers=HEADERS, timeout=240)
+    r.raise_for_status()
+    zip_data = r.content
+
+    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+        csv_files = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+
+    all_cnpjs: Set[str] = set()
+    matches: List[str] = []
+    errors: List[Tuple[str, str]] = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_processar_arquivo, zip_data, name, termo, modo): name for name in csv_files}
+        for fut in as_completed(futs):
+            name = futs[fut]
+            cnpjs, found, err = fut.result()
+            if err:
+                errors.append((name, err))
+            elif found:
+                matches.append(name)
+                all_cnpjs.update(cnpjs)
+
+    return all_cnpjs, matches, errors
+
+# ----------------- API principal (multi-mês) -----------------
+def buscar_cnpjs(ativo: str, categoria: str, max_workers: int = 2, meses: int = 12):
     """
     categoria:
       - 'CREDITO_PRIVADO'  => interpreta ativo como ISIN (match exato)
       - 'CDB'             => se ativo tem espaço => DESCRIÇÃO COMPLETA exata
                              senão => CÓDIGO DO ATIVO exato
-    Retorna: (yyyymm, df_cnpjs, df_matches, df_errors)
+
+    meses: quantos meses (ZIPs) tentar a partir do mais recente.
+
+    Retorna:
+      (ultimo_yyyymm_tentado, df_cnpjs, df_matches, df_errors, df_meses_com_match)
     """
     ativo = (ativo or "").strip()
     if not ativo:
@@ -212,35 +252,45 @@ def buscar_cnpjs(ativo: str, categoria: str, max_workers: int = 2):
     else:
         modo = "CDB_DESCR_EXATA" if (" " in ativo) else "CDB_CODIGO"
 
-    yyyymm, zip_url = descobrir_zip_mais_recente()
-    r = requests.get(zip_url, headers=HEADERS, timeout=240)
-    r.raise_for_status()
-    zip_data = r.content
+    max_workers = max(1, min(int(max_workers), 6))
+    meses = max(1, min(int(meses), 60))  # limita p/ não explodir
 
-    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-        csv_files = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+    yyyymms = listar_zips_disponiveis()
+    yyyymms = yyyymms[:meses]
 
     all_cnpjs: Set[str] = set()
-    matches: List[str] = []
-    errors: List[Tuple[str, str]] = []
+    matches_rows: List[Tuple[str, str]] = []   # (yyyymm, arquivo)
+    errors_rows: List[Tuple[str, str, str]] = []  # (yyyymm, arquivo, erro)
+    meses_com_match: Set[str] = set()
 
-    max_workers = max(1, min(int(max_workers), 6))
+    ultimo = yyyymms[-1]
 
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {ex.submit(_processar_arquivo, zip_data, name, ativo, modo): name for name in csv_files}
-        for fut in as_completed(futs):
-            name = futs[fut]
-            cnpjs, found, err = fut.result()
-            if err:
-                errors.append((name, err))
-            elif found:
-                matches.append(name)
-                all_cnpjs.update(cnpjs)
+    for yyyymm in yyyymms:
+        cnpjs_mes, matches_mes, errors_mes = _varrer_um_mes(yyyymm, ativo, modo, max_workers=max_workers)
+
+        if matches_mes:
+            meses_com_match.add(yyyymm)
+            for arq in matches_mes:
+                matches_rows.append((yyyymm, arq))
+
+        if errors_mes:
+            for arq, err in errors_mes:
+                errors_rows.append((yyyymm, arq, err))
+
+        if cnpjs_mes:
+            all_cnpjs.update(cnpjs_mes)
+
+        # Se quiser “parar cedo” quando já achou algo, descomente:
+        # if all_cnpjs:
+        #     break
 
     df_cnpjs = pd.DataFrame(sorted([c for c in all_cnpjs if c]), columns=["CNPJ"])
-    df_matches = pd.DataFrame(sorted(matches), columns=["Arquivo"])
-    df_errors = pd.DataFrame(errors, columns=["Arquivo", "Erro"])
-    return yyyymm, df_cnpjs, df_matches, df_errors
+    df_matches = pd.DataFrame(matches_rows, columns=["YYYYMM", "Arquivo"])
+    df_errors = pd.DataFrame(errors_rows, columns=["YYYYMM", "Arquivo", "Erro"])
+    df_meses_match = pd.DataFrame(sorted(list(meses_com_match), reverse=True), columns=["YYYYMM_com_match"])
 
-def buscar_cnpjs_por_isin(isin_input: str, max_workers: int = 2):
-    return buscar_cnpjs(isin_input, categoria="CREDITO_PRIVADO", max_workers=max_workers)
+    return ultimo, df_cnpjs, df_matches, df_errors, df_meses_match
+
+# compatibilidade com o que você já tinha
+def buscar_cnpjs_por_isin(isin_input: str, max_workers: int = 2, meses: int = 12):
+    return buscar_cnpjs(isin_input, categoria="CREDITO_PRIVADO", max_workers=max_workers, meses=meses)
