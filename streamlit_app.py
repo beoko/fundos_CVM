@@ -1,7 +1,8 @@
 import io
 import pandas as pd
 import streamlit as st
-from core import buscar_cnpjs
+import core
+
 
 st.set_page_config(page_title="CVM – Ativo → CNPJs", layout="centered")
 
